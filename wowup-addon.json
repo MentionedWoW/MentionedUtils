@@ -1,0 +1,11 @@
+{
+    "id": "MentionedUtils",
+    "title": "MentionedUtils",
+    "version": "1.0.1",
+    "interface": 120001,
+    "summary": "Utility functions for Mentioned",
+    "update": {
+        "type": "github",
+        "repo": "mentionedwow/mentionedutils"
+    }
+}
