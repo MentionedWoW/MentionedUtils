@@ -1,4 +1,4 @@
-## Interface: 120000, 120001
+## Interface: 120000, 120001, 120007
 ## Title: MentionedUtils
 ## Category: Mentioned
 ## Version: 1.0.1

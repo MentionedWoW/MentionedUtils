@@ -1,8 +1,8 @@
 {
     "id": "MentionedUtils",
     "title": "MentionedUtils",
-    "version": "1.0.1",
-    "interface": 120001,
+    "version": "1.0.3",
+    "interface": 120007,
     "summary": "Utility functions for Mentioned",
     "update": {
         "type": "github",

@@ -1,12 +1,14 @@
-local ADDON_NAME = "Mentioned Utils"
+local ADDON_NAME = "MentionedUtils"
 local ADDON_PREFIX = "MENTIONED_UTILS"
 local BIGWIGS_PREFIX = "BigWigs"
 local DBM_PREFIX = "D5"
+local DBM_PREFIX_ALT = "D4"
 
 local frame = CreateFrame("Frame")
 C_ChatInfo.RegisterAddonMessagePrefix(ADDON_PREFIX)
 C_ChatInfo.RegisterAddonMessagePrefix(BIGWIGS_PREFIX)
 C_ChatInfo.RegisterAddonMessagePrefix(DBM_PREFIX)
+C_ChatInfo.RegisterAddonMessagePrefix(DBM_PREFIX_ALT)
 
 local DEFAULT_PULL = 10
 local memes = MentionedMedia.BreakMemes
@@ -16,6 +18,8 @@ local InFight = C_InstanceEncounter and C_InstanceEncounter.IsEncounterInProgres
 local activeTimer = nil
 local activeBreak = nil
 local memeHideTimer = nil
+local breakDragActive = false
+
 -- ------------------------
 -- SavedVariables Init
 -- ------------------------
@@ -44,33 +48,72 @@ pullBar.timeText:SetPoint("RIGHT", -5, 0)
 
 local localFrame = CreateFrame("Frame", "MentionedBreakFrame", UIParent)
 
--- Default settings
-local defaults = {
-    width = 128,
-    height = 128,
-    x = 0,
-    y = 0,
-}
+local function ApplyBreakFramePosition()
+    local position = MentionedUtilsDB and MentionedUtilsDB.breakFramePosition
+    local x = (position and position.x) or math.floor(UIParent:GetWidth() / 6)
+    local y = (position and position.y) or 0
 
-SavCatDB = SavCatDB or {}
-
--- Merge defaults into saved variables
-local function InitSettings()
-    for k, v in pairs(defaults) do
-        if SavCatDB[k] == nil then
-            SavCatDB[k] = v
-        end
-    end
+    localFrame:ClearAllPoints()
+    localFrame:SetPoint("CENTER", UIParent, "CENTER", x, y)
 end
 
-local function ApplySettings()
-    localFrame:SetSize(SavCatDB.width, SavCatDB.height)
-    localFrame:ClearAllPoints()
-    localFrame:SetPoint("CENTER", UIParent, "CENTER", SavCatDB.x, SavCatDB.y)
+local function SaveBreakFramePosition()
+    if not MentionedUtilsDB then
+        MentionedUtilsDB = {}
+    end
+
+    local frameX, frameY = localFrame:GetCenter()
+    local parentX, parentY = UIParent:GetCenter()
+    local frameScale = localFrame:GetEffectiveScale() or 1
+    local parentScale = UIParent:GetEffectiveScale() or 1
+
+    if not frameX or not frameY or not parentX or not parentY then
+        return
+    end
+
+    local x = (frameX * frameScale - parentX * parentScale) / parentScale
+    local y = (frameY * frameScale - parentY * parentScale) / parentScale
+    MentionedUtilsDB.breakFramePosition = {
+        x = x,
+        y = y,
+    }
 end
 
 localFrame.texture = localFrame:CreateTexture(nil, "BACKGROUND")
 localFrame.texture:SetAllPoints(localFrame)
+
+localFrame.timerText = localFrame:CreateFontString(nil, "OVERLAY", "GameFontHighlightLarge")
+localFrame.timerText:SetPoint("LEFT", localFrame, "RIGHT", 12, 0)
+localFrame.timerText:SetJustifyH("LEFT")
+localFrame.timerText:SetTextColor(1, 0.82, 0, 1)
+do
+    local fontPath, _, fontFlags = localFrame.timerText:GetFont()
+    if fontPath then
+        localFrame.timerText:SetFont(fontPath, 18, fontFlags)
+    end
+end
+localFrame.timerText:Hide()
+
+localFrame:SetClampedToScreen(true)
+localFrame:SetMovable(true)
+localFrame:EnableMouse(true)
+localFrame:RegisterForDrag("LeftButton")
+localFrame:SetScript("OnDragStart", function(self)
+    if IsShiftKeyDown() then
+        breakDragActive = true
+        self:StartMoving()
+    end
+end)
+
+localFrame:SetScript("OnDragStop", function(self)
+    if not breakDragActive then
+        return
+    end
+
+    self:StopMovingOrSizing()
+    breakDragActive = false
+    SaveBreakFramePosition()
+end)
 
 
 
@@ -92,6 +135,13 @@ local countdownSounds = {
     [1] = "Interface\\AddOns\\MentionedUtils\\Sounds\\1.mp3",
 }
 
+local function FormatBreakTime(seconds)
+    local total = math.max(0, math.ceil(tonumber(seconds) or 0))
+    local mins = math.floor(total / 60)
+    local secs = total % 60
+    return string.format("%d:%02d", mins, secs)
+end
+
 local function PlayVoiceCountdown(sec)
     if (MentionedUtilsDB and MentionedUtilsDB.countDownChoice == 1 and sec == 3) then
         PlaySoundFile("Interface\\AddOns\\MentionedUtils\\Sounds\\leeroy.mp3", "Master") 
@@ -100,6 +150,67 @@ local function PlayVoiceCountdown(sec)
     else
         PlaySoundFile(countdownSounds[sec], "Master")
     end
+end
+
+local function GetMemeCount()
+    return MentionedMedia and MentionedMedia.BreakMemes and #MentionedMedia.BreakMemes or 0
+end
+
+local function GetDeterministicMemeIndex(seconds, sender)
+    local memeCount = GetMemeCount()
+    if memeCount <= 0 then
+        return nil
+    end
+
+    local key = string.format("%s:%s", tostring(sender or ""), tostring(tonumber(seconds) or 0))
+    local hash = 0
+
+    for i = 1, #key do
+        hash = (hash * 33 + key:byte(i)) % 2147483647
+    end
+
+    return (hash % memeCount) + 1
+end
+
+local function PickRandomMemeIndex()
+    local memeCount = GetMemeCount()
+    if memeCount <= 0 then
+        return nil
+    end
+
+    return math.random(1, memeCount)
+end
+
+local function GetMemeDisplayName(index)
+    local meme = MentionedMedia and MentionedMedia.BreakMemes and MentionedMedia.BreakMemes[index]
+    if not meme or not meme[1] then
+        return nil
+    end
+
+    local fileName = meme[1]:match("([^\\/]+)$") or meme[1]
+    return fileName:gsub("%.[^.]+$", "")
+end
+
+local function ResolveMemeIndex(selection)
+    if not selection or selection == "" then
+        return nil
+    end
+
+    local numericIndex = tonumber(selection)
+    local memeCount = GetMemeCount()
+    if numericIndex and numericIndex >= 1 and numericIndex <= memeCount then
+        return math.floor(numericIndex)
+    end
+
+    local needle = selection:lower()
+    for i = 1, memeCount do
+        local name = GetMemeDisplayName(i)
+        if name and name:lower():find(needle, 1, true) then
+            return i
+        end
+    end
+
+    return nil
 end
 
 -- ------------------------
@@ -166,8 +277,7 @@ function ShowRandomMeme(duration, index)
 
     -- Set size & position
     localFrame:SetSize(width, height)
-    localFrame:ClearAllPoints()
-    localFrame:SetPoint("CENTER", UIParent, "CENTER", UIParent:GetWidth() / 6, 0)
+    ApplyBreakFramePosition()
     -- Set texture
     localFrame.texture:SetTexture(path)
 
@@ -210,14 +320,21 @@ local function StartBreakTimer(seconds, sender, index)
     ShowRandomMeme(seconds, index)
     local remaining = seconds
 
+    localFrame.timerText:SetText("Break: " .. FormatBreakTime(remaining))
+    localFrame.timerText:Show()
+
 
     PlaySoundFile("Interface\\AddOns\\MentionedUtils\\Sounds\\dingding.mp3", "Master")
     activeBreak = C_Timer.NewTicker(0.1, function(ticker)
         remaining = (remaining or 0) - 0.1
         if remaining <= 0 then
             ticker:Cancel()
+            activeBreak = nil
+            localFrame.timerText:Hide()
             return
         end
+
+        localFrame.timerText:SetText("Break: " .. FormatBreakTime(remaining))
     end)
 end
 
@@ -231,10 +348,10 @@ local function CancelBreak()
         memeHideTimer = nil
     end
     localFrame:Hide()
-    print("Break timer cancelled.")
+    localFrame.timerText:Hide()
 end
 
-local function HandleIncomingBreak(seconds, sender)
+local function HandleIncomingBreak(seconds, sender, index)
     seconds = tonumber(seconds)
     if seconds == 0 then
         CancelBreak()
@@ -243,9 +360,36 @@ local function HandleIncomingBreak(seconds, sender)
     if not seconds or seconds < 0 then
         return
     end
-    local memeCount = MentionedMedia and MentionedMedia.BreakMemes and #MentionedMedia.BreakMemes or 0
-    local index = memeCount > 0 and math.random(1, memeCount) or nil
+
+    index = tonumber(index)
+    local memeCount = GetMemeCount()
+    if not index or index < 1 or index > memeCount then
+        index = GetDeterministicMemeIndex(seconds, sender)
+    end
+
     StartBreakTimer(seconds, sender, index)
+end
+
+local function HandleIncomingTestMeme(seconds, sender, index)
+    local duration = tonumber(seconds)
+    local memeCount = GetMemeCount()
+
+    if not duration or duration <= 0 then
+        duration = 8
+    end
+
+    index = tonumber(index)
+    if not index or index < 1 or index > memeCount then
+        return
+    end
+
+    if activeBreak then
+        activeBreak:Cancel()
+        activeBreak = nil
+    end
+
+    localFrame.timerText:Hide()
+    ShowRandomMeme(duration, index)
 end
 
 local originalPullSlash = nil
@@ -363,7 +507,7 @@ SlashCmdList["MENTIONEDBREAKDEFAULT"] = function(msg)
 
         if minutes == 0 then
             CancelBreak()
-            C_ChatInfo.SendAddonMessage(ADDON_PREFIX, "CANCEL", IsInGroup(2) and "INSTANCE_CHAT" or "RAID")
+            C_ChatInfo.SendAddonMessage(ADDON_PREFIX, "CANCEL_BREAK", IsInGroup(2) and "INSTANCE_CHAT" or "RAID")
             return
         end
 
@@ -371,15 +515,64 @@ SlashCmdList["MENTIONEDBREAKDEFAULT"] = function(msg)
 			print("Starting break timer for " .. minutes .. " minute(s).")
 		end
 		local seconds = minutes * 60
+        local selectedIndex = PickRandomMemeIndex()
+        StartBreakTimer(seconds, UnitName("player"), selectedIndex)
 		
 		if IsInGroup() then
-			local name = UnitName("player")
-			local realm = GetRealmName()
-			local normalizedPlayerRealm = realm:gsub("[%s-]+", "") -- Has to mimic DBM code
-			local result =  C_ChatInfo.SendAddonMessage(ADDON_PREFIX, ("%s-%s\t1\tBT\t%d"):format(name, normalizedPlayerRealm, seconds), IsInGroup(2) and "INSTANCE_CHAT" or "RAID") -- DBM message
-		
+            C_ChatInfo.SendAddonMessage(ADDON_PREFIX, ("BI\t%d\t%d"):format(selectedIndex or 0, seconds), IsInGroup(2) and "INSTANCE_CHAT" or "RAID")
 		end
 	end
+end
+
+SLASH_MENTIONEDUTILSTESTMEME1 = "/mutestmeme"
+SLASH_MENTIONEDUTILSTESTMEME2 = "/mumeme"
+SlashCmdList["MENTIONEDUTILSTESTMEME"] = function(msg)
+    local selection, rest = msg:match("^(%S+)%s*(.*)$")
+
+    if not selection or selection == "" then
+        print("Usage: /mutestmeme <index|name|list> [seconds]")
+        return
+    end
+
+    if selection:lower() == "list" then
+        local memeCount = GetMemeCount()
+        print("MentionedUtils memes:")
+        for i = 1, memeCount do
+            local name = GetMemeDisplayName(i) or ("meme" .. i)
+            print(i .. ". " .. name)
+        end
+        return
+    end
+
+    local index = ResolveMemeIndex(selection)
+    if not index then
+        print("Meme not found. Use /mutestmeme list to see available choices.")
+        return
+    end
+
+    local seconds = tonumber(rest)
+    if not seconds or seconds <= 0 then
+        seconds = 8
+    end
+
+    local channel = nil
+    if IsInGroup(2) then
+        channel = "INSTANCE_CHAT"
+    elseif IsInRaid() then
+        channel = "RAID"
+    elseif IsInGroup() then
+        channel = "PARTY"
+    end
+
+    local myName = UnitName("player")
+    print(("Sending test meme #%d (%s) for %d second(s).")
+        :format(index, GetMemeDisplayName(index) or "unknown", seconds))
+
+    HandleIncomingTestMeme(seconds, myName, index)
+
+    if channel then
+        C_ChatInfo.SendAddonMessage(ADDON_PREFIX, ("TM\t%d\t%d"):format(index, seconds), channel)
+    end
 end
 
 
@@ -412,6 +605,13 @@ frame:SetScript("OnEvent", function(self, event, ...)
             MentionedUtilsDB.countDownChoice = 2
         end
 
+        MentionedUtilsDB.breakFramePosition = MentionedUtilsDB.breakFramePosition or {
+            x = math.floor(UIParent:GetWidth() / 6),
+            y = 0,
+        }
+
+        ApplyBreakFramePosition()
+
         print("Mentioned Utils loaded.")
         return
     end
@@ -425,20 +625,35 @@ frame:SetScript("OnEvent", function(self, event, ...)
     if event == "CHAT_MSG_ADDON" then
         local prefix, message, channel, sender = ...
 
-        -- Handle BigWigs break: P^Break^<seconds>
+        -- Handle BigWigs break formats.
+        -- Common format: P^Break^<seconds>
+        -- Tolerated variants: Break^<seconds> and fallback shapes.
         if prefix == BIGWIGS_PREFIX then
             local bwPrefix, bwMsg, extra = strsplit("^", message)
+            local seconds = nil
+
             if bwPrefix == "P" and bwMsg == "Break" then
-                HandleIncomingBreak(extra, sender)
+                seconds = extra
+            elseif bwPrefix == "Break" then
+                seconds = bwMsg
+            elseif bwMsg == "Break" then
+                seconds = extra
+            end
+
+            if seconds then
+                HandleIncomingBreak(seconds, sender)
             end
             return
         end
 
         -- Handle DBM break format: <name-realm>\t1\tBT\t<seconds>
-        if prefix == DBM_PREFIX then
-            if message:find("\tBT\t") then
-                local _, _, _, seconds = strsplit("\t", message)
-                HandleIncomingBreak(seconds, sender)
+        if prefix == DBM_PREFIX or prefix == DBM_PREFIX_ALT then
+            local _, _, subPrefix, seconds = strsplit("\t", message)
+            if subPrefix == "BT" and seconds then
+                HandleIncomingBreak(seconds, sender, nil)
+            elseif message:find("\tBT\t") then
+                local _, _, _, fallbackSeconds = strsplit("\t", message)
+                HandleIncomingBreak(fallbackSeconds, sender, nil)
             end
             return
         end
@@ -446,10 +661,35 @@ frame:SetScript("OnEvent", function(self, event, ...)
         -- Ignore other prefixes
         if prefix ~= ADDON_PREFIX then return end
 
+        if message == "CANCEL_BREAK" then
+            CancelBreak()
+            PlaySoundFile("Interface\\AddOns\\MentionedUtils\\Sounds\\cancel.mp3", "Master")
+            return
+        end
+
+        if message == "CANCEL_PULL" then
+            CancelPull()
+            PlaySoundFile("Interface\\AddOns\\MentionedUtils\\Sounds\\cancel.mp3", "Master")
+            return
+        end
+
+        -- Backward-compatibility with legacy generic cancel payload.
         if message == "CANCEL" then
             CancelPull()
             CancelBreak()
             PlaySoundFile("Interface\\AddOns\\MentionedUtils\\Sounds\\cancel.mp3", "Master")
+            return
+        end
+
+        -- Handle DBM-style break payload sent on our own prefix: <name-realm>\t1\tBT\t<seconds>
+        if message:find("\tBT\t") then
+            local _, _, subPrefix, seconds = strsplit("\t", message)
+            if subPrefix == "BT" and seconds then
+                HandleIncomingBreak(seconds, sender, nil)
+            else
+                local _, _, _, fallbackSeconds = strsplit("\t", message)
+                HandleIncomingBreak(fallbackSeconds, sender, nil)
+            end
             return
         end
 
@@ -461,6 +701,18 @@ frame:SetScript("OnEvent", function(self, event, ...)
 
             if seconds then
                 StartBreakTimer(seconds, sender, index)
+            end
+            return
+        end
+
+        if message:find("^TM\t") then
+            local _, index, seconds = strsplit("\t", message)
+
+            index = tonumber(index)
+            seconds = tonumber(seconds)
+
+            if index then
+                HandleIncomingTestMeme(seconds, sender, index)
             end
             return
         end
