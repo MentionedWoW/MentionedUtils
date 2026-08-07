@@ -27,9 +27,6 @@ local function EnsureDatabase()
     if MentionedUtilsDB.bonusRollDebugIgnoreRaidContext == nil then
         MentionedUtilsDB.bonusRollDebugIgnoreRaidContext = true
     end
-    if MentionedUtilsDB.bonusRollGuildTrackOnly == nil then
-        MentionedUtilsDB.bonusRollGuildTrackOnly = false
-    end
     if MentionedUtilsDB.bonusRollGuildViewOnly == nil then
         MentionedUtilsDB.bonusRollGuildViewOnly = false
     end
@@ -76,20 +73,38 @@ end
 
 local function RebuildGuildRosterCache()
     guildRosterCache.byName = {}
-    guildRosterCache.updatedAt = GetTime()
+    guildRosterCache.updatedAt = 0
 
     if not IsInGuild() then
+        guildRosterCache.updatedAt = GetTime()
         return
     end
 
-    GuildRoster()
+    if GuildRoster then
+        GuildRoster()
+    elseif C_GuildInfo and C_GuildInfo.GuildRoster then
+        C_GuildInfo.GuildRoster()
+    end
 
-    local numMembers = GetNumGuildMembers() or 0
+    local numMembers = 0
+    if GetNumGuildMembers then
+        numMembers = GetNumGuildMembers() or 0
+    elseif C_GuildInfo and C_GuildInfo.GetNumGuildMembers then
+        numMembers = C_GuildInfo.GetNumGuildMembers() or 0
+    end
     local _, playerRealm = UnitFullName("player")
     local realmToken = GetNormalizedRealmToken(playerRealm)
 
     for i = 1, numMembers do
-        local fullName = GetGuildRosterInfo(i)
+        local fullName = nil
+        if GetGuildRosterInfo then
+            fullName = GetGuildRosterInfo(i)
+        elseif C_GuildInfo and C_GuildInfo.GetGuildRosterInfo then
+            local rosterInfo = C_GuildInfo.GetGuildRosterInfo(i)
+            if type(rosterInfo) == "table" then
+                fullName = rosterInfo.fullName or rosterInfo.name
+            end
+        end
         if fullName then
             local fullKey, shortKey = NormalizePlayerKey(fullName, realmToken)
             if fullKey then
@@ -100,6 +115,10 @@ local function RebuildGuildRosterCache()
             end
         end
     end
+
+    if next(guildRosterCache.byName) then
+        guildRosterCache.updatedAt = GetTime()
+    end
 end
 
 local function IsGuildMemberByName(name)
@@ -107,7 +126,9 @@ local function IsGuildMemberByName(name)
         return false
     end
 
-    if (GetTime() - (guildRosterCache.updatedAt or 0)) > 30 then
+    local updatedAt = guildRosterCache.updatedAt or 0
+    local cacheEmpty = next(guildRosterCache.byName) == nil
+    if updatedAt == 0 or cacheEmpty or (GetTime() - updatedAt) > 30 then
         RebuildGuildRosterCache()
     end
 
@@ -116,13 +137,19 @@ local function IsGuildMemberByName(name)
     return (fullKey and guildRosterCache.byName[fullKey]) or (shortKey and guildRosterCache.byName[shortKey]) or false
 end
 
-local function ShouldTrackPlayer(playerFullName)
-    EnsureDatabase()
-    if not MentionedUtilsDB.bonusRollGuildTrackOnly then
-        return true
+local function IsCurrentPlayerByName(name)
+    local playerName, playerRealm = UnitFullName("player")
+    if not playerName then
+        return false
     end
 
-    return IsGuildMemberByName(playerFullName)
+    local selfName = playerRealm and playerRealm ~= "" and (playerName .. "-" .. playerRealm) or playerName
+    local targetFull, targetShort = NormalizePlayerKey(name, playerRealm)
+    local selfFull, selfShort = NormalizePlayerKey(selfName, playerRealm)
+
+    return (targetFull and selfFull and targetFull == selfFull)
+        or (targetShort and selfShort and targetShort == selfShort)
+        or false
 end
 
 local function ExtractItemID(itemLink)
@@ -351,10 +378,6 @@ local function HandleBonusRollMessage(message)
 
     local playerFullName, itemLink = ParseBonusRollMessage(message)
     if not playerFullName then
-        return
-    end
-
-    if not ShouldTrackPlayer(playerFullName) then
         return
     end
 
@@ -604,7 +627,27 @@ local function EnsureExportFrame()
         frame:Hide()
     end)
     editBox:SetScript("OnTextChanged", function(self)
-        self:SetHeight(math.max(320, self:GetStringHeight() + 30))
+        local stringHeight = 0
+        if self.GetStringHeight then
+            stringHeight = self:GetStringHeight() or 0
+        else
+            local text = self:GetText() or ""
+            local lineCount = 1
+            for _ in text:gmatch("\n") do
+                lineCount = lineCount + 1
+            end
+
+            local lineHeight = 14
+            if self.GetFont then
+                local _, fontSize = self:GetFont()
+                if fontSize then
+                    lineHeight = fontSize + 2
+                end
+            end
+            stringHeight = lineCount * lineHeight
+        end
+
+        self:SetHeight(math.max(320, stringHeight + 30))
     end)
 
     scroll:SetScrollChild(editBox)
@@ -733,8 +776,16 @@ local function EnsureBonusRollViewer()
     content:SetSize(1, 1)
     scroll:SetScrollChild(content)
 
+    local emptyStateText = content:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
+    emptyStateText:SetPoint("TOPLEFT", 8, -8)
+    emptyStateText:SetPoint("RIGHT", -8, 0)
+    emptyStateText:SetJustifyH("LEFT")
+    emptyStateText:SetText("")
+    emptyStateText:Hide()
+
     frame.scroll = scroll
     frame.content = content
+    frame.emptyStateText = emptyStateText
     bonusRollViewer = frame
 
     if not tContains(UISpecialFrames, frame:GetName()) then
@@ -781,7 +832,7 @@ BuildFilteredEntries = function(log, count, filterText, guildOnly)
 
     for i = 1, #log do
         local entry = log[i]
-        local guildMatch = (not guildOnly) or IsGuildMemberByName(entry.player)
+        local guildMatch = (not guildOnly) or IsGuildMemberByName(entry.player) or IsCurrentPlayerByName(entry.player)
         if guildMatch and EntryMatchesFilter(entry, filterText) then
             entries[#entries + 1] = entry
             if #entries >= wanted then
@@ -847,6 +898,7 @@ ShowBonusRollViewer = function(countArg)
     local guildOnly = MentionedUtilsDB and MentionedUtilsDB.bonusRollGuildViewOnly or false
     local filtered = BuildFilteredEntries(log, count, filterText, guildOnly)
     local visibleCount = #filtered
+    local shouldShowGuildSyncHint = guildOnly and IsInGuild() and (next(guildRosterCache.byName) == nil)
     frame.currentCount = count
     frame.currentFilter = filterText
     frame.currentGuildOnly = guildOnly
@@ -855,15 +907,22 @@ ShowBonusRollViewer = function(countArg)
         frame.guildOnlyCheck:SetChecked(guildOnly)
     end
 
+    local subtitleText = ""
     if filterText == "" and not guildOnly then
-        frame.subtitle:SetText(("Showing %d of %d saved entries. Hover a row to see tooltip."):format(visibleCount, #log))
+        subtitleText = ("Showing %d of %d saved entries. Hover a row to see tooltip."):format(visibleCount, #log)
     elseif filterText == "" and guildOnly then
-        frame.subtitle:SetText(("Showing %d guild entries (from %d total). Hover a row to see tooltip."):format(visibleCount, #log))
+        subtitleText = ("Showing %d guild entries (from %d total). Hover a row to see tooltip."):format(visibleCount, #log)
     elseif not guildOnly then
-        frame.subtitle:SetText(("Showing %d filtered entries (from %d total). Hover a row to see tooltip."):format(visibleCount, #log))
+        subtitleText = ("Showing %d filtered entries (from %d total). Hover a row to see tooltip."):format(visibleCount, #log)
     else
-        frame.subtitle:SetText(("Showing %d filtered guild entries (from %d total). Hover a row to see tooltip."):format(visibleCount, #log))
+        subtitleText = ("Showing %d filtered guild entries (from %d total). Hover a row to see tooltip."):format(visibleCount, #log)
     end
+
+    if shouldShowGuildSyncHint then
+        subtitleText = subtitleText .. " Guild roster syncing..."
+    end
+
+    frame.subtitle:SetText(subtitleText)
 
     for i = 1, visibleCount do
         local row = bonusRollRows[i]
@@ -892,71 +951,23 @@ ShowBonusRollViewer = function(countArg)
         bonusRollRows[i].tooltipLink = nil
     end
 
-    local contentHeight = math.max(1, visibleCount * 24)
+    if frame.emptyStateText then
+        if visibleCount == 0 then
+            if #log == 0 then
+                frame.emptyStateText:SetText("No bonus roll entries saved yet.")
+            else
+                frame.emptyStateText:SetText("No entries match the current search filter.")
+            end
+            frame.emptyStateText:Show()
+        else
+            frame.emptyStateText:Hide()
+        end
+    end
+
+    local contentHeight = math.max(48, visibleCount * 24)
     frame.content:SetHeight(contentHeight)
     frame.scroll:SetVerticalScroll(0)
     frame:Show()
-
-    if visibleCount == 0 then
-        if #log == 0 then
-            print("MentionedUtils: No bonus roll entries saved yet.")
-        else
-            print("MentionedUtils: No entries match the current search filter.")
-        end
-    end
-end
-
-local function HandleBrollsGuildCommand(argString)
-    EnsureDatabase()
-
-    local scope, rest = (argString or ""):match("^(%S*)%s*(.-)%s*$")
-    scope = NormalizeSearchText(scope)
-    local opt = NormalizeSearchText(rest)
-
-    if scope == "" or scope == "status" then
-        print(("MentionedUtils: guild tracking filter is %s; list guild filter is %s.")
-            :format(MentionedUtilsDB.bonusRollGuildTrackOnly and "ON" or "OFF", MentionedUtilsDB.bonusRollGuildViewOnly and "ON" or "OFF"))
-        return
-    end
-
-    local function parseOnOff(value)
-        if value == "on" then
-            return true
-        end
-        if value == "off" then
-            return false
-        end
-        return nil
-    end
-
-    if scope == "track" then
-        local setValue = parseOnOff(opt)
-        if setValue == nil then
-            print("Usage: /mu brollsguild track on|off")
-            return
-        end
-        MentionedUtilsDB.bonusRollGuildTrackOnly = setValue
-        print(("MentionedUtils: guild-only tracking is now %s."):format(setValue and "ON" or "OFF"))
-        return
-    end
-
-    if scope == "view" then
-        local setValue = parseOnOff(opt)
-        if setValue == nil then
-            print("Usage: /mu brollsguild view on|off")
-            return
-        end
-        MentionedUtilsDB.bonusRollGuildViewOnly = setValue
-        print(("MentionedUtils: guild-only list filter is now %s."):format(setValue and "ON" or "OFF"))
-        if bonusRollViewer and bonusRollViewer:IsShown() then
-            ShowBonusRollViewer(bonusRollViewer.currentCount)
-        end
-        return
-    end
-
-    print("Usage: /mu brollsguild status")
-    print("Usage: /mu brollsguild track on|off")
-    print("Usage: /mu brollsguild view on|off")
 end
 
 local function HandleBrollsCommand(argString)
@@ -980,11 +991,6 @@ local function HandleBrollsCommand(argString)
         end
 
         ShowExportFrame(exportCount, exportFilter, exportGuildOnly)
-        return
-    end
-
-    if first == "guild" then
-        HandleBrollsGuildCommand(rest)
         return
     end
 
@@ -1014,7 +1020,7 @@ local function HandleBrollsCommand(argString)
     print("/mu brolls export [count] - Open copy-friendly export text.")
     print("/mu brolls clear - Clear all saved bonus roll entries.")
     print("/mu brolls test - Send a local system-style test message using a bag item.")
-    print("/mu brolls guild status|track on|off|view on|off - Guild filtering options.")
+    print("MentionedUtils: Use the Guild only checkbox in the bonus roll window for guild display/export filtering.")
 end
 
 local function RegisterSlashCommands()
@@ -1025,11 +1031,6 @@ local function RegisterSlashCommands()
 
         if cmd == "brolls" then
             HandleBrollsCommand(rest)
-            return
-        end
-
-        if cmd == "brollsguild" then
-            HandleBrollsGuildCommand(rest)
             return
         end
 
@@ -1061,7 +1062,7 @@ local function RegisterSlashCommands()
         print("/mu brolls export [count] - Open copy-friendly export text.")
         print("/mu brolls clear - Clear all saved bonus roll entries.")
         print("/mu brolls test - Send a local system-style test message using a bag item.")
-        print("/mu brollsguild status|track on|off|view on|off - Guild filtering options.")
+        print("MentionedUtils: Use the Guild only checkbox in the bonus roll window for guild display/export filtering.")
         print("/mu brollsdebug on|off|status - Toggle raid-context requirement for logging.")
     end
 end
