@@ -1,10 +1,11 @@
 ## Interface: 120000, 120001, 120007
 ## Title: MentionedUtils
 ## Category: Mentioned
-## Version: 1.0.3
+## Version: 1.0.4
 ## SavedVariables: MentionedUtilsDB
 
 ## OptionalDeps: BigWigs
 
 Media.lua
 RaidUtils.lua
+BonusRolls.lua

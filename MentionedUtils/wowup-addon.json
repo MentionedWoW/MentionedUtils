@@ -1,7 +1,7 @@
 {
     "id": "MentionedUtils",
     "title": "MentionedUtils",
-    "version": "1.0.3",
+    "version": "1.0.4",
     "interface": 120007,
     "summary": "Utility functions for Mentioned",
     "update": {
