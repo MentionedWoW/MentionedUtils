@@ -308,12 +308,17 @@ local function BuildTooltipHyperlink(entry)
             return "item:" .. itemString
         end
         return entry.item
+
     end
 
     return nil
 end
 
 local function ParseBonusRollMessage(message)
+    if issecretvalue and issecretvalue(message) then
+        return nil
+    end
+
     if not message or message == "" then
         return nil
     end
