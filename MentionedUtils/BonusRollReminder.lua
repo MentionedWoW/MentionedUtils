@@ -3,10 +3,11 @@ local Addon = _G[addonName] or {}
 _G[addonName] = Addon
 
 local ADDON_NAME = "MentionedUtils"
-local REMINDER_DURATION = 5
-local SETTINGS_WIDTH = 360
+local SETTINGS_WIDTH = 440
 local SETTINGS_HEIGHT = 400
 local DEBUG_TEST_ENCOUNTER_ID = 999999
+local HEROIC_DIFFICULTY_ID = 15
+local MYTHIC_DIFFICULTY_ID = 16
 
 local bosses = {
     { name = "Nek'zali the Soulcoiler", instance = "The Venomous Abyss" },
@@ -107,6 +108,39 @@ local function SetSelectedBoss(boss)
     EnsureDatabase().bonusRollReminderBoss = boss and boss.name or nil
 end
 
+local function GetBossDifficultySettings(boss)
+    local db = EnsureDatabase()
+    db.bonusRollReminderDifficulties = db.bonusRollReminderDifficulties or {}
+    local settings = db.bonusRollReminderDifficulties[boss.name]
+    if not settings then
+        settings = { heroic = true, mythic = true }
+        db.bonusRollReminderDifficulties[boss.name] = settings
+    end
+    if settings.heroic == nil then settings.heroic = true end
+    if settings.mythic == nil then settings.mythic = true end
+    return settings
+end
+
+local function SetBossDifficultyEnabled(boss, difficultyID, enabled)
+    local settings = GetBossDifficultySettings(boss)
+    if difficultyID == HEROIC_DIFFICULTY_ID then
+        settings.heroic = enabled and true or false
+    elseif difficultyID == MYTHIC_DIFFICULTY_ID then
+        settings.mythic = enabled and true or false
+    end
+end
+
+local function IsBossDifficultyEnabled(boss, difficultyID)
+    local settings = GetBossDifficultySettings(boss)
+    if difficultyID == HEROIC_DIFFICULTY_ID then
+        return settings.heroic
+    end
+    if difficultyID == MYTHIC_DIFFICULTY_ID then
+        return settings.mythic
+    end
+    return true
+end
+
 local function HideReminder()
     if reminderTimer then
         reminderTimer:Cancel()
@@ -114,6 +148,22 @@ local function HideReminder()
     end
     if reminderFrame then
         reminderFrame:Hide()
+    end
+end
+
+local function RefreshReminderLootSpec()
+    if not reminderFrame or not reminderFrame.lootSpecText or not reminderFrame.lootSpecIcon then
+        return
+    end
+
+    local lootSpecName, lootSpecIcon = GetCurrentLootSpec()
+    if lootSpecName and lootSpecIcon then
+        reminderFrame.lootSpecText:SetText("Current Loot spec: " .. lootSpecName)
+        reminderFrame.lootSpecIcon:SetTexture(lootSpecIcon)
+        reminderFrame.lootSpecIcon:Show()
+    else
+        reminderFrame.lootSpecText:SetText("Loot spec: unavailable")
+        reminderFrame.lootSpecIcon:Hide()
     end
 end
 
@@ -131,6 +181,11 @@ local function ShowReminder(bossName)
         })
         reminderFrame:SetBackdropColor(0.03, 0.03, 0.03, 0.96)
         reminderFrame:SetBackdropBorderColor(1, 0.82, 0, 1)
+
+        reminderFrame.closeButton = CreateFrame("Button", nil, reminderFrame, "UIPanelCloseButton")
+        reminderFrame.closeButton:SetSize(22, 22)
+        reminderFrame.closeButton:SetPoint("TOPRIGHT", -2, -2)
+        reminderFrame.closeButton:SetScript("OnClick", HideReminder)
 
         reminderFrame.title = reminderFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
         reminderFrame.title:SetPoint("TOP", 0, -14)
@@ -173,18 +228,9 @@ local function ShowReminder(bossName)
 
     HideReminder()
     reminderFrame.title:SetText("Bonus roll: " .. bossName)
-    local lootSpecName, lootSpecIcon = GetCurrentLootSpec()
-    if lootSpecName and lootSpecIcon then
-        reminderFrame.lootSpecText:SetText("Current Loot spec: " .. lootSpecName)
-        reminderFrame.lootSpecIcon:SetTexture(lootSpecIcon)
-        reminderFrame.lootSpecIcon:Show()
-    else
-        reminderFrame.lootSpecText:SetText("Loot spec: unavailable")
-        reminderFrame.lootSpecIcon:Hide()
-    end
+    RefreshReminderLootSpec()
     reminderFrame:Show()
     PlaySound(SOUNDKIT and SOUNDKIT.RAID_WARNING or 8959, "Master")
-    reminderTimer = C_Timer.NewTimer(REMINDER_DURATION, HideReminder)
 end
 
 local function RefreshSettings()
@@ -193,6 +239,13 @@ local function RefreshSettings()
     local selected = GetSelectedBoss()
     for _, row in ipairs(settingsFrame.rows) do
         row:SetChecked(row.boss == selected)
+        local difficultySettings = GetBossDifficultySettings(row.boss)
+        if row.heroicCheck then
+            row.heroicCheck:SetChecked(difficultySettings.heroic)
+        end
+        if row.mythicCheck then
+            row.mythicCheck:SetChecked(difficultySettings.mythic)
+        end
         if row.debugIDBox then
             row.debugIDBox:SetText(tostring(GetDebugEncounterID()))
         end
@@ -233,6 +286,14 @@ local function CreateSettingsFrame()
     subtitle:SetPoint("TOP", title, "BOTTOM", 0, -8)
     subtitle:SetText("Choose the boss whose bonus roll you want to remember.")
 
+    local heroicHeader = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    heroicHeader:SetPoint("TOPLEFT", 285, -54)
+    heroicHeader:SetText("Heroic")
+
+    local mythicHeader = settingsFrame:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+    mythicHeader:SetPoint("TOPLEFT", 355, -54)
+    mythicHeader:SetText("Mythic")
+
     settingsFrame.rows = {}
     for index, boss in ipairs(bosses) do
         local row = CreateFrame("CheckButton", nil, settingsFrame, "UICheckButtonTemplate")
@@ -243,6 +304,23 @@ local function CreateSettingsFrame()
             SetSelectedBoss(self:GetChecked() and self.boss or nil)
             RefreshSettings()
         end)
+
+        local difficultySettings = GetBossDifficultySettings(boss)
+        local heroicCheck = CreateFrame("CheckButton", nil, settingsFrame, "UICheckButtonTemplate")
+        heroicCheck:SetPoint("TOPLEFT", 275, -70 - ((index - 1) * 25))
+        heroicCheck:SetChecked(difficultySettings.heroic)
+        heroicCheck:SetScript("OnClick", function(self)
+            SetBossDifficultyEnabled(boss, HEROIC_DIFFICULTY_ID, self:GetChecked())
+        end)
+        row.heroicCheck = heroicCheck
+
+        local mythicCheck = CreateFrame("CheckButton", nil, settingsFrame, "UICheckButtonTemplate")
+        mythicCheck:SetPoint("TOPLEFT", 345, -70 - ((index - 1) * 25))
+        mythicCheck:SetChecked(difficultySettings.mythic)
+        mythicCheck:SetScript("OnClick", function(self)
+            SetBossDifficultyEnabled(boss, MYTHIC_DIFFICULTY_ID, self:GetChecked())
+        end)
+        row.mythicCheck = mythicCheck
 
         if boss.debug then
             row.text:SetText("Debug Test Boss ID:")
@@ -329,6 +407,10 @@ local function HandleEncounterEnd(encounterID, encounterName, difficultyID, grou
         return
     end
 
+    if not IsBossDifficultyEnabled(selected, difficultyID) then
+        return
+    end
+
     local matches = selected.debug and encounterID == GetDebugEncounterID()
     if not selected.debug then
         matches = selected.encounterID and encounterID == selected.encounterID
@@ -347,14 +429,12 @@ end
 local function TestEncounterFinish()
     local selected = GetSelectedBoss()
     if not selected then
-        print("MentionedUtils: select a boss in /mu brr before running the test.")
-        return
+        selected = bosses[#bosses]
+        print("MentionedUtils: no boss selected; testing with Debug Test Boss.")
     end
 
-    local encounterID = selected.debug and GetDebugEncounterID() or selected.encounterID
-    local encounterName = selected.debug and selected.name or selected.name
     print("MentionedUtils: simulating a successful encounter finish for " .. selected.name .. ".")
-    HandleEncounterEnd(encounterID, encounterName, 0, 1, 1)
+    ShowReminder(selected.name)
 end
 
 local function RegisterSlashCommand()
@@ -392,11 +472,19 @@ end
 
 eventFrame:RegisterEvent("ADDON_LOADED")
 eventFrame:RegisterEvent("ENCOUNTER_END")
+eventFrame:RegisterEvent("PLAYER_LOOT_SPEC_UPDATED")
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
         if ... == ADDON_NAME then
             EnsureDatabase()
             RegisterSlashCommand()
+        end
+        return
+    end
+
+    if event == "PLAYER_LOOT_SPEC_UPDATED" then
+        if reminderFrame and reminderFrame:IsShown() then
+            RefreshReminderLootSpec()
         end
         return
     end
