@@ -50,13 +50,14 @@ local originalPullSlash = nil
 local function MentionedPullSlashOverride(input)
     if not originalPullSlash then return end
 
-    local trimmed = input and input:match("^%s*(.-)%s*$") or ""
+    local inputText = tostring(input or "")
+    local trimmed = inputText:match("^%s*(.-)%s*$")
     if trimmed == "" then
         originalPullSlash(tostring(GetDefaultPullSeconds()))
         return
     end
 
-    originalPullSlash(input)
+    originalPullSlash(inputText)
 end
 
 local function OverridePullSlashDirect()

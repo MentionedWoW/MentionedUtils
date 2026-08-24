@@ -1,7 +1,7 @@
 ## Interface: 120100, 120000, 120001, 120007
 ## Title: MentionedUtils
 ## Category: Mentioned
-## Version: 1.1.0
+## Version: 1.2.0
 ## SavedVariables: MentionedUtilsDB
 
 ## OptionalDeps: BigWigs
@@ -12,3 +12,4 @@ RaidUtils.lua
 BonusRollHistory.lua
 UpgradeWarning.lua
 BonusRollReminder.lua
+VaultReminder.lua
