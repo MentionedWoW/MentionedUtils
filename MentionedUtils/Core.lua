@@ -43,6 +43,10 @@ local function EnsureDatabase()
         MentionedUtilsDB.breakFrameScale = 1
     end
 
+    if MentionedUtilsDB.breakTextScale == nil then
+        MentionedUtilsDB.breakTextScale = 1
+    end
+
     return MentionedUtilsDB
 end
 
