@@ -39,6 +39,10 @@ local function EnsureDatabase()
         y = 0,
     }
 
+    if MentionedUtilsDB.breakFrameScale == nil then
+        MentionedUtilsDB.breakFrameScale = 1
+    end
+
     return MentionedUtilsDB
 end
 
@@ -172,7 +176,7 @@ SlashCmdList["MENTIONEDBREAKDEFAULT"] = function(msg)
         if not minutes or minutes < 0 or minutes > 60 or (minutes > 0 and minutes < 1) then return end
 
         if minutes == 0 then
-            Addon:CancelBreak()
+            Addon.CancelBreak()
             C_ChatInfo.SendAddonMessage(ADDON_PREFIX, "CANCEL_BREAK", IsInGroup(2) and "INSTANCE_CHAT" or "RAID")
             return
         end
@@ -180,8 +184,8 @@ SlashCmdList["MENTIONEDBREAKDEFAULT"] = function(msg)
         print("Starting break timer for " .. minutes .. " minute(s).")
 
         local seconds = minutes * 60
-        local selectedIndex = Addon:PickRandomMemeIndex()
-        Addon:StartBreakTimer(seconds, UnitName("player"), selectedIndex)
+        local selectedIndex = Addon.PickRandomMemeIndex()
+        Addon.StartBreakTimer(seconds, UnitName("player"), selectedIndex)
 
         if IsInGroup() then
             C_ChatInfo.SendAddonMessage(ADDON_PREFIX, ("BI\t%d\t%d"):format(selectedIndex or 0, seconds), IsInGroup(2) and "INSTANCE_CHAT" or "RAID")
@@ -204,16 +208,16 @@ SlashCmdList["MENTIONEDUTILSTESTMEME"] = function(msg)
     end
 
     if selection:lower() == "list" then
-        local memeCount = Addon:GetMemeCount()
+        local memeCount = Addon.GetMemeCount()
         print("MentionedUtils memes:")
         for i = 1, memeCount do
-            local name = Addon:GetMemeDisplayName(i) or ("meme" .. i)
+            local name = Addon.GetMemeDisplayName(i) or ("meme" .. i)
             print(i .. ". " .. name)
         end
         return
     end
 
-    local index = Addon:ResolveMemeIndex(selection)
+    local index = Addon.ResolveMemeIndex(selection)
     if not index then
         print("Meme not found. Use /mutestmeme list to see available choices.")
         return
@@ -235,9 +239,9 @@ SlashCmdList["MENTIONEDUTILSTESTMEME"] = function(msg)
 
     local myName = UnitName("player")
     print(("Sending test meme #%d (%s) for %d second(s).")
-        :format(index, Addon:GetMemeDisplayName(index) or "unknown", seconds))
+        :format(index, Addon.GetMemeDisplayName(index) or "unknown", seconds))
 
-    Addon:HandleIncomingTestMeme(seconds, myName, index)
+    Addon.HandleIncomingTestMeme(seconds, myName, index)
 
     if channel then
         C_ChatInfo.SendAddonMessage(ADDON_PREFIX, ("TM\t%d\t%d"):format(index, seconds), channel)
@@ -262,7 +266,7 @@ frame:SetScript("OnEvent", function(_, event, ...)
         EnsureDatabase()
 
         if Addon.ApplyBreakFramePosition then
-            Addon:ApplyBreakFramePosition()
+            Addon.ApplyBreakFramePosition()
         end
 
         print("Mentioned Utils loaded.")
